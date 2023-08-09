@@ -18,6 +18,7 @@ from ldm.models.diffusion.ddpm import LatentDiffusion
 from ldm.util import log_txt_as_img, exists, instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 
+import tensorrt as trt
 
 class ControlledUnetModel(UNetModel):
     def forward(self, x, timesteps=None, context=None, control=None, only_mid_control=False, **kwargs):
@@ -325,32 +326,50 @@ class ControlLDM(LatentDiffusion):
         control = control.to(memory_format=torch.contiguous_format).float()
         return x, dict(c_crossattn=[c], c_concat=[control])
 
-    def apply_model(self, x_noisy, t, cond, export_onnx=False, use_trt=False,  *args, **kwargs):
+    def apply_model(self, x_noisy, t, cond, export_onnx, use_trt,  *args, **kwargs):
         assert isinstance(cond, dict)
         diffusion_model = self.model.diffusion_model
 
         cond_txt = torch.cat(cond['c_crossattn'], 1)
+        hint_input = torch.cat(cond['c_concat'], 1)
 
         if cond['c_concat'] is None:
             eps = diffusion_model(x=x_noisy, timesteps=t, context=cond_txt, control=None, only_mid_control=self.only_mid_control)
         else:
-            from pdb import set_trace
-            set_trace()
-
+             
             if export_onnx:
                 torch.onnx.export(self.control_model, (x_noisy, torch.cat(cond['c_concat'], 1), t, cond_txt), "control_model.onnx", export_params=True, opset_version=17, do_constant_folding=True)
 
             if use_trt:
-                pass
+                context = use_trt[0]["context"]
+                engine = context.engine
+                nIO = engine.num_io_tensors
+                lTensorName = [engine.get_tensor_name(i) for i in range(nIO)]
+                nInput = [engine.get_tensor_mode(lTensorName[i]) for i in range(nIO)].count(trt.TensorIOMode.INPUT)
+                
+                context.set_tensor_address(lTensorName[0], x_noisy.data_ptr())
+                context.set_tensor_address(lTensorName[1], hint_input.data_ptr())
+                context.set_tensor_address(lTensorName[2], t.data_ptr())
+                context.set_tensor_address(lTensorName[3], cond_txt.data_ptr())
+
+                context.execute_async_v3(0)
+
+                bufferD =  use_trt[0]["bufferD"]
+                control = bufferD[4:]
+                #from pdb import set_trace
+                #set_trace()
+                #print("use_trt")
+                
             else:
-                control = self.control_model(x=x_noisy, hint=torch.cat(cond['c_concat'], 1), timesteps=t, context=cond_txt)
+                control = self.control_model(x=x_noisy, hint=hint_input, timesteps=t, context=cond_txt)
+            
             control = [c * scale for c, scale in zip(control, self.control_scales)]
             
             if export_onnx:
                 torch.onnx.export(diffusion_model, (x_noisy, t, cond_txt, control), "diffusion_model.onnx", export_params=True, opset_version=17, do_constant_folding=True)
            
             if use_trt:
-                pass
+               eps = diffusion_model(x=x_noisy, timesteps=t, context=cond_txt, control=control, only_mid_control=self.only_mid_control)
             else:
                eps = diffusion_model(x=x_noisy, timesteps=t, context=cond_txt, control=control, only_mid_control=self.only_mid_control)
 

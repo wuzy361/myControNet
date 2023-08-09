@@ -78,7 +78,8 @@ def build_model(onnxFile):
 
 if __name__ == "__main__":
 
-    onnxFiles =["control_model.onnx", "diffusion_model.onnx"]
+    onnxFiles =["control_model.onnx"]
+    #onnxFiles =["control_model.onnx", "diffusion_model.onnx"]
     #onnxFiles =["diffusion_model.onnx"]
     for onnxFile in onnxFiles:
         build_model(onnxFile)

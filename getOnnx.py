@@ -6,7 +6,7 @@ if __name__ == "__main__":
     path = "/home/player/pictures_croped/bird_0.jpg"
     img = cv2.imread(path)
     hk = hackathon()
-    hk.initialize()
+    hk.model_init()
 
     export_onnx = False
     new_img = hk.process(img,
